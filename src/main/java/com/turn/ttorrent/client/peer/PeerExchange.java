@@ -16,12 +16,14 @@
 package com.turn.ttorrent.client.peer;
 
 import com.turn.ttorrent.client.SharedTorrent;
+import com.turn.ttorrent.client.message.Message;
 import com.turn.ttorrent.common.protocol.PeerMessage;
 import com.turn.ttorrent.common.protocol.PeerMessage.Type;
 
 import java.io.EOFException;
 import java.io.IOException;
 import java.lang.InterruptedException;
+import java.net.Socket;
 import java.net.SocketException;
 import java.nio.ByteBuffer;
 import java.nio.channels.SocketChannel;
@@ -78,16 +80,19 @@ class PeerExchange {
 		LoggerFactory.getLogger(PeerExchange.class);
 
 	private static final int KEEP_ALIVE_IDLE_MINUTES = 2;
+	private static final int KEEP_ALIVE_FOR_MINUTES = 3;
 
 	private SharingPeer peer;
 	private SharedTorrent torrent;
 	private SocketChannel channel;
-
+	private Socket socket;
+	
 	private Set<MessageListener> listeners;
 
 	private IncomingThread in;
 	private OutgoingThread out;
 	private BlockingQueue<PeerMessage> sendQueue;
+	private BlockingQueue<Message> sendQueueAlt;
 	private volatile boolean stop;
 
 	/**
@@ -134,6 +139,47 @@ class PeerExchange {
 			this.send(PeerMessage.BitfieldMessage.craft(pieces));
 		}
 	}
+	
+	public PeerExchange(SharingPeer peer, SharedTorrent torrent, Socket socket)
+			throws SocketException {
+		this.peer = peer;
+		this.torrent = torrent;
+		this.socket = socket;
+
+		// Set the socket read timeout.
+		this.socket
+				.setSoTimeout(PeerExchange.KEEP_ALIVE_FOR_MINUTES * 60 * 1000);
+
+		this.listeners = new HashSet<MessageListener>();
+		this.sendQueueAlt = new LinkedBlockingQueue<Message>();
+
+		if (!this.peer.hasPeerId()) {
+			throw new IllegalStateException("Peer does not have a "
+					+ "peer ID. Was the handshake made properly?");
+		}
+
+		String peerId = this.peer.getHexPeerId()
+				.substring(this.peer.getHexPeerId().length() - 6).toUpperCase();
+		this.in = new IncomingThread();
+		this.in.setName("bt-peer(.." + peerId + ")-recv");
+
+		this.out = new OutgoingThread();
+		this.out.setName("bt-peer(.." + peerId + ")-send");
+
+		// Automatically start the exchange activity loops
+		this.stop = false;
+		this.in.start();
+		this.out.start();
+
+		logger.debug("Started peer exchange with {} for {}.", this.peer,
+				this.torrent);
+
+		// If we have pieces, start by sending a BITFIELD message to the peer.
+		BitSet pieces = this.torrent.getCompletedPieces();
+		if (pieces.cardinality() > 0) {
+			this.send(Message.BitfieldMessage.craft(pieces));
+		}
+	}
 
 	/**
 	 * Register a new message listener to receive messages.
@@ -164,6 +210,25 @@ class PeerExchange {
 	public void send(PeerMessage message) {
 		try {
 			this.sendQueue.put(message);
+		} catch (InterruptedException ie) {
+			// Ignore, our send queue will only block if it contains
+			// MAX_INTEGER messages, in which case we're already in big
+			// trouble, and we'd have to be interrupted, too.
+		}
+	}
+	
+	/**
+	 * Send a message to the connected peer.
+	 * 
+	 * The message is queued in the outgoing message queue and will be processed
+	 * as soon as possible.
+	 * 
+	 * @param message
+	 *            The message object to send.
+	 */
+	public void send(Message message) {
+		try {
+			this.sendQueueAlt.put(message);
 		} catch (InterruptedException ie) {
 			// Ignore, our send queue will only block if it contains
 			// MAX_INTEGER messages, in which case we're already in big

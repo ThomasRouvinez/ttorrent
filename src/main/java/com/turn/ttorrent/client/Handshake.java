@@ -35,18 +35,28 @@ public class Handshake {
 	ByteBuffer data;
 	ByteBuffer infoHash;
 	ByteBuffer peerId;
+	private final byte[] reserved;
 
 	private Handshake(ByteBuffer data, ByteBuffer infoHash,
-			ByteBuffer peerId) {
+			ByteBuffer peerId, byte[] reserved) {
 		this.data = data;
 		this.data.rewind();
 
 		this.infoHash = infoHash;
 		this.peerId = peerId;
+		this.reserved = reserved;
 	}
 
 	public ByteBuffer getData() {
 		return this.data;
+	}
+	
+	public byte[] getBytes() {
+		return this.data.array();
+	}
+	
+	public byte[] getReserved() {
+		return reserved;
 	}
 
 	public byte[] getInfoHash() {
@@ -84,7 +94,7 @@ public class Handshake {
 		byte[] peerId = new byte[20];
 		buffer.get(peerId);
 		return new Handshake(buffer, ByteBuffer.wrap(infoHash),
-				ByteBuffer.wrap(peerId));
+				ByteBuffer.wrap(peerId), reserved);
 	}
 
 	public static Handshake craft(byte[] torrentInfoHash,
@@ -106,7 +116,7 @@ public class Handshake {
 			buffer.put(infoHash);
 			buffer.put(peerId);
 
-			return new Handshake(buffer, infoHash, peerId);
+			return new Handshake(buffer, infoHash, peerId, null);
 		} catch (UnsupportedEncodingException uee) {
 			return null;
 		}

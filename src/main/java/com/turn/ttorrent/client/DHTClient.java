@@ -25,8 +25,10 @@ import org.slf4j.LoggerFactory;
 import com.turn.ttorrent.bcodec.BDecoder;
 import com.turn.ttorrent.bcodec.BEValue;
 import com.turn.ttorrent.bcodec.BEncoder;
+import com.turn.ttorrent.cli.ClientMain;
 import com.turn.ttorrent.client.peer.DHTPeer;
 import com.turn.ttorrent.client.peer.DHTPeer.DHTPeerStatus;
+import com.turn.ttorrent.client.peer.SharingPeer;
 import com.turn.ttorrent.common.Peer;
 
 /**
@@ -161,16 +163,16 @@ public class DHTClient implements Runnable {
 
 		synchronized (p) {
 			if (p.getStatus() == DHTPeerStatus.NOT_CHECKED) {
-				p.setStatus(this.connectToPeer(p) ? DHTPeerStatus.OPERABLE
-						: DHTPeerStatus.NOT_OPERABLE);
-				if (p.getStatus() == DHTPeerStatus.OPERABLE && level > 0
-						&& level <= 5) {
+				p.setStatus(this.connectToPeer(p) ? DHTPeerStatus.OPERABLE : DHTPeerStatus.NOT_OPERABLE);
+				
+				if (p.getStatus() == DHTPeerStatus.OPERABLE && level > 0 && level <= 5) {
+					System.out.println("\nDHT PEER IS OPERABLE\n");
 					retrieveNodes(p, level);
+					
 					try {
 						retrievePeers(p);
 					} catch (Exception e) {
 						logger.error(e.toString());
-						logger.error("ICI !");
 					}
 				}
 			}
@@ -192,6 +194,7 @@ public class DHTClient implements Runnable {
 
 			ByteArrayOutputStream os = new ByteArrayOutputStream();
 			BEncoder.bencode(pingRequest, os);
+			
 			ByteBuffer response = send(p, os.toByteArray());
 			BEValue pingResponse = BDecoder.bdecode(new ByteArrayInputStream(
 					response.array()));
@@ -228,9 +231,12 @@ public class DHTClient implements Runnable {
 
 			ByteArrayOutputStream os = new ByteArrayOutputStream();
 			BEncoder.bencode(get_peersRequest, os);
+			
 			ByteBuffer response = send(peer, os.toByteArray());
 			BEValue get_peerResponse = BDecoder
 					.bdecode(new ByteArrayInputStream(response.array()));
+			
+			System.out.println("\nDHT NODE ANSWERED\n");
 
 			if (get_peerResponse.getMap().containsKey("e"))
 				throw new Exception(get_peerResponse.getMap().get("e")
@@ -239,8 +245,7 @@ public class DHTClient implements Runnable {
 			if (get_peerResponse.getValue() instanceof Map) {
 				Map<String, BEValue> responseValues = get_peerResponse.getMap();
 
-				if (responseValues.containsKey("r")
-						&& responseValues.get("r").getValue() instanceof Map) {
+				if (responseValues.containsKey("r") && responseValues.get("r").getValue() instanceof Map) {
 					responseValues = responseValues.get("r").getMap();
 
 					byte[] value = null;
@@ -268,9 +273,13 @@ public class DHTClient implements Runnable {
 
 							Peer newPeer = new Peer(InetAddress
 									.getByAddress(ip).getHostAddress(), p, null);
+							
+							System.out.println("NEW DHT PEER CREATED: " + newPeer.getAddress());
 
-							if (level > 0 && level < 5)
+							if (level >= 0 && level < 5){
+								System.out.println("\nALLOW TO HANDLE THE NEW PEER\n");
 								handleNewDHTPeer(newPeer, level + 1);
+							}
 						}
 					}
 				}
@@ -297,14 +306,18 @@ public class DHTClient implements Runnable {
 
 		ByteArrayOutputStream os = new ByteArrayOutputStream();
 		BEncoder.bencode(get_peersRequest, os);
+		
 		ByteBuffer response = send(peer, os.toByteArray());
 		BEValue get_peerResponse = BDecoder.bdecode(new ByteArrayInputStream(
 				response.array()));
 
-		if (get_peerResponse.getMap().containsKey("e"))
+		if (get_peerResponse.getMap().containsKey("e")){
+			System.out.println("ERROR: KEY E CONTAINED");
 			throw new Exception(get_peerResponse.getMap().get("e").getString());
+		}
 
 		if (get_peerResponse.getValue() instanceof Map) {
+			System.out.println("\nMAP WORKED !!!\n");
 			Map<String, BEValue> responseValues = get_peerResponse.getMap();
 
 			if (responseValues.containsKey("r")
@@ -324,6 +337,7 @@ public class DHTClient implements Runnable {
 				if (value != null) {
 					List<Peer> result = new ArrayList<Peer>();
 					ByteBuffer buffer = ByteBuffer.wrap(value);
+					
 					while (buffer.remaining() >= (containsDHTNodes ? 26 : 6)) {
 						byte[] dhtId = new byte[20];
 
@@ -347,6 +361,7 @@ public class DHTClient implements Runnable {
 						}
 						// } else {
 						result.add(newPeer);
+						System.out.println("\nNEW PEER ADDED:\n\tAddress: " + newPeer.getIp() + "\n\tIdentifier " + newPeer.getHostIdentifier() + "\n");
 						// }
 
 					}

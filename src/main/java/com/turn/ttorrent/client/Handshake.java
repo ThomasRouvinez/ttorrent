@@ -41,7 +41,6 @@ public class Handshake {
 			ByteBuffer peerId, byte[] reserved) {
 		this.data = data;
 		this.data.rewind();
-
 		this.infoHash = infoHash;
 		this.peerId = peerId;
 		this.reserved = reserved;
@@ -97,8 +96,7 @@ public class Handshake {
 				ByteBuffer.wrap(peerId), reserved);
 	}
 
-	public static Handshake craft(byte[] torrentInfoHash,
-			byte[] clientPeerId) {
+	public static Handshake craft(byte[] torrentInfoHash, byte[] clientPeerId) {
 		try {
 			ByteBuffer buffer = ByteBuffer.allocate(
 					Handshake.BASE_HANDSHAKE_LENGTH +

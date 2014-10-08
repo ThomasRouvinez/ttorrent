@@ -58,8 +58,7 @@ public abstract class PeerMessage {
 		BITFIELD(5),
 		REQUEST(6),
 		PIECE(7),
-		CANCEL(8),
-		PORT(9);
+		CANCEL(8);
 
 		private byte id;
 		Type(int id) {

@@ -15,14 +15,11 @@
  */
 package com.turn.ttorrent.client;
 
-import com.turn.ttorrent.client.DHTClient.DHTClientStatus;
 import com.turn.ttorrent.client.announce.Announce;
 import com.turn.ttorrent.client.announce.AnnounceException;
 import com.turn.ttorrent.client.announce.AnnounceResponseListener;
 import com.turn.ttorrent.client.peer.PeerActivityListener;
 import com.turn.ttorrent.client.peer.SharingPeer;
-import com.turn.ttorrent.client.peer.SharingPeer.PeerStatus;
-import com.turn.ttorrent.client.peer.SharingPeersManager;
 import com.turn.ttorrent.common.Peer;
 import com.turn.ttorrent.common.Torrent;
 import com.turn.ttorrent.common.protocol.PeerMessage;
@@ -30,9 +27,6 @@ import com.turn.ttorrent.common.protocol.TrackerMessage;
 
 import java.io.IOException;
 import java.net.InetAddress;
-import java.net.InetSocketAddress;
-import java.net.Socket;
-import java.net.SocketException;
 import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
 import java.nio.channels.SocketChannel;
@@ -49,9 +43,6 @@ import java.util.TreeSet;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ThreadFactory;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -92,10 +83,9 @@ public class Client extends Observable implements Runnable,
 	/** Optimistic unchokes are done every 2 loop iterations, i.e. every
 	 * 2*UNCHOKING_FREQUENCY seconds. */
 	private static final int OPTIMISTIC_UNCHOKE_ITERATIONS = 3;
+
 	private static final int RATE_COMPUTATION_ITERATIONS = 2;
 	private static final int MAX_DOWNLOADERS_UNCHOKE = 4;
-	private static final int VOLUNTARY_OUTBOUND_CONNECTIONS = 100;
-	private static final String BITTORRENT_ID_PREFIX = "-TO0042-";
 
 	public enum ClientState {
 		WAITING,
@@ -105,32 +95,24 @@ public class Client extends Observable implements Runnable,
 		ERROR,
 		DONE;
 	};
-	
+
+	private static final String BITTORRENT_ID_PREFIX = "-TO0042-";
+
 	private SharedTorrent torrent;
 	private ClientState state;
 	private Peer self;
+
 	private Thread thread;
 	private boolean stop;
 	private long seed;
-	private String id;
 
 	private ConnectionHandler service;
 	private Announce announce;
-	private DHTClient dhtClient;
 	private ConcurrentMap<String, SharingPeer> peers;
 	private ConcurrentMap<String, SharingPeer> connected;
 
 	private Random random;
-	
-	/**
-	 * for checking peers
-	 */
-	private ExecutorService peerExecutor = Executors.newFixedThreadPool(2, new ResolveClientThreadFactory());
-	
-	/**
-	 * Shared peers manager
-	 */
-	private final SharingPeersManager sharedPeersManager;
+	private DHTManager dhtManager;
 
 	/**
 	 * Initialize the BitTorrent client.
@@ -142,9 +124,9 @@ public class Client extends Observable implements Runnable,
 		throws UnknownHostException, IOException {
 		this.torrent = torrent;
 		this.state = ClientState.WAITING;
-		
-		this.id = Client.BITTORRENT_ID_PREFIX
-				+ UUID.randomUUID().toString().split("-")[4];
+
+		String id = Client.BITTORRENT_ID_PREFIX + UUID.randomUUID()
+			.toString().split("-")[4];
 
 		// Initialize the incoming connection handler and register ourselves to
 		// it.
@@ -152,7 +134,8 @@ public class Client extends Observable implements Runnable,
 		this.service.register(this);
 
 		this.self = new Peer(
-			this.service.getSocketAddress().getAddress().getHostAddress(),
+			this.service.getSocketAddress()
+				.getAddress().getHostAddress(),
 			(short)this.service.getSocketAddress().getPort(),
 			ByteBuffer.wrap(id.getBytes(Torrent.BYTE_ENCODING)));
 
@@ -174,10 +157,9 @@ public class Client extends Observable implements Runnable,
 		this.connected = new ConcurrentHashMap<String, SharingPeer>();
 		this.random = new Random(System.currentTimeMillis());
 		
-		UDPConnectionManager.init(this.service.getSocketAddress().getPort());
-
-		this.dhtClient = new DHTClient(this);
-		this.sharedPeersManager = new SharingPeersManager(this.torrent);
+		// Own DHT thread.
+		dhtManager = new DHTManager(this);
+		System.out.println("\nDHT MANAGER INITIALIZED\n");
 	}
 
 	/**
@@ -382,31 +364,14 @@ public class Client extends Observable implements Runnable,
 
 		this.announce.start();
 		this.service.start();
-		this.dhtClient.start();
-
+		
+		// Start DHT thread.
+		this.dhtManager.start();
+		
 		int optimisticIterations = 0;
 		int rateComputationIterations = 0;
-		
-		boolean announceServiceStarted = true;
 
 		while (!this.stop) {
-			
-			if (!this.torrent.isComplete()) {
-				List<SharingPeer> peersToConnect = sharedPeersManager
-						.getFirstNotConnectedPeers(Client.VOLUNTARY_OUTBOUND_CONNECTIONS
-								- this.connected.size());
-
-				for (SharingPeer peer : peersToConnect) {
-					peerExecutor.submit(new CallablePeerAnnounce(peer));
-				}
-			} else
-				break;
-			
-			if (!announceServiceStarted && this.dhtClient.getStatus() == DHTClientStatus.STARTED) {
-				announceServiceStarted = true;
-				this.announce.start();
-			}
-			
 			optimisticIterations =
 				(optimisticIterations == 0 ?
 				 Client.OPTIMISTIC_UNCHOKE_ITERATIONS :
@@ -439,10 +404,6 @@ public class Client extends Observable implements Runnable,
 				"and announce threads...");
 
 		this.service.stop();
-		this.announce.stop();
-		this.dhtClient.stop();
-		this.peerExecutor.shutdownNow();
-		
 		try {
 			this.service.close();
 		} catch (IOException ioe) {
@@ -450,6 +411,7 @@ public class Client extends Observable implements Runnable,
 				ioe.getMessage(), ioe);
 		}
 
+		this.dhtManager.stop();
 		this.announce.stop();
 
 		// Close all peer connections
@@ -548,7 +510,7 @@ public class Client extends Observable implements Runnable,
 	 *
 	 * @param search The {@link Peer} specification.
 	 */
-	private SharingPeer getOrCreatePeer(Peer search) {
+	public SharingPeer getOrCreatePeer(Peer search) {
 		SharingPeer peer;
 
 		synchronized (this.peers) {
@@ -556,7 +518,9 @@ public class Client extends Observable implements Runnable,
 			if (search.hasPeerId()) {
 				peer = this.peers.get(search.getHexPeerId());
 				if (peer != null) {
-					logger.trace("Found peer (by peer ID): {}.", peer);
+					
+					// DISABLED }
+					// logger.trace("Found peer (by peer ID): {}.", peer);
 					this.peers.put(peer.getHostIdentifier(), peer);
 					this.peers.put(search.getHostIdentifier(), peer);
 					return peer;
@@ -572,7 +536,7 @@ public class Client extends Observable implements Runnable,
 					this.peers.put(search.getHexPeerId(), peer);
 				}
 
-				logger.debug("Found peer (by host ID): {}.", peer);
+				//logger.debug("Found peer (by host ID): {}.", peer);
 				return peer;
 			}
 
@@ -712,19 +676,6 @@ public class Client extends Observable implements Runnable,
 		int incomplete) {
 		this.announce.setInterval(interval);
 	}
-	
-	public void handleAnnounceResponse(List<Peer> peers, boolean fromDHTClient) {
-		for (Peer peer : peers) {
-			SharingPeer sPeer = sharedPeersManager.getOrCreatePeer(
-					peer.getPeerId() != null ? peer.getPeerId().array() : null,
-					peer.getIp(), peer.getPort());
-			sPeer.setFromDHTClient(fromDHTClient);
-			sharedPeersManager.updatePeer(sPeer);
-		}
-		// for (Peer peer : peers)
-		// add to executor
-		// peerExecutor.submit(new CallablePeerAnnounce(peer));
-	}
 
 	/**
 	 * Handle the discovery of new peers.
@@ -734,13 +685,14 @@ public class Client extends Observable implements Runnable,
 	 */
 	@Override
 	public void handleDiscoveredPeers(List<Peer> peers) {
+		
 		if (peers == null || peers.isEmpty()) {
 			// No peers returned by the tracker. Apparently we're alone on
 			// this one for now.
 			return;
 		}
 
-		logger.info("Got {} peer(s) in tracker response.", peers.size());
+		//logger.info("Got {} peer(s) in tracker response.", peers.size());
 
 		if (!this.service.isAlive()) {
 			logger.warn("Connection handler service is not available.");
@@ -795,14 +747,14 @@ public class Client extends Observable implements Runnable,
 				? ByteBuffer.wrap(peerId)
 				: (ByteBuffer)null));
 
-		logger.info("Handling new peer connection with {}...", search);
+		//logger.info("Handling new peer connection with {}...", search);
 		SharingPeer peer = this.getOrCreatePeer(search);
 
 		try {
 			synchronized (peer) {
 				if (peer.isConnected()) {
-					logger.info("Already connected with {}, closing link.",
-						peer);
+					/*logger.info("Already connected with {}, closing link.",
+						peer);*/
 					channel.close();
 					return;
 				}
@@ -821,8 +773,7 @@ public class Client extends Observable implements Runnable,
 				});
 		} catch (Exception e) {
 			this.connected.remove(peer.getHexPeerId());
-			logger.warn("Could not handle new peer connection " +
-					"with {}: {}", peer, e.getMessage());
+			//logger.warn("Could not handle new peer connection " + "with {}: {}", peer, e.getMessage());
 		}
 	}
 
@@ -839,7 +790,7 @@ public class Client extends Observable implements Runnable,
 	 */
 	@Override
 	public void handleFailedConnection(SharingPeer peer, Throwable cause) {
-		logger.warn("Could not connect to {}: {}.", peer, cause.getMessage());
+		//logger.warn("Could not connect to {}: {}.", peer, cause.getMessage());
 		this.peers.remove(peer.getHostIdentifier());
 		if (peer.hasPeerId()) {
 			this.peers.remove(peer.getHexPeerId());
@@ -925,8 +876,8 @@ public class Client extends Observable implements Runnable,
 				for (SharingPeer remote : this.connected.values()) {
 					if (remote.isDownloading()) {
 						int requests = remote.cancelPendingRequests().size();
-						logger.info("Cancelled {} remaining pending requests on {}.",
-							requests, remote);
+						/*logger.info("Cancelled {} remaining pending requests on {}.",
+							requests, remote);*/
 					}
 				}
 
@@ -953,12 +904,12 @@ public class Client extends Observable implements Runnable,
 		if (this.connected.remove(peer.hasPeerId()
 					? peer.getHexPeerId()
 					: peer.getHostIdentifier()) != null) {
-			logger.debug("Peer {} disconnected, [{}/{}].",
+			/*logger.debug("Peer {} disconnected, [{}/{}].",
 				new Object[] {
 					peer,
 					this.connected.size(),
 					this.peers.size()
-				});
+				}*/
 		}
 
 		peer.reset();
@@ -966,8 +917,7 @@ public class Client extends Observable implements Runnable,
 
 	@Override
 	public void handleIOException(SharingPeer peer, IOException ioe) {
-		logger.warn("I/O error while exchanging data with {}, " +
-			"closing connection with it!", peer, ioe.getMessage());
+		//logger.warn("I/O error while exchanging data with {}, closing connection with it!", peer, ioe.getMessage());
 		peer.unbind(true);
 	}
 
@@ -1047,101 +997,5 @@ public class Client extends Observable implements Runnable,
 				this.timer.cancel();
 			}
 		}
-	}
-
-	@Override
-	public void handleNewDHTPeer(Peer peer) {
-		this.dhtClient.handleNewDHTPeer(peer);
-	}
-	
-	/**
-	 * Process a peer's information obtained in an announce reply.
-	 * 
-	 * <p>
-	 * Retrieve or create a new peer for the peer information obtained, and
-	 * eventually connect to it.
-	 * </p>
-	 * 
-	 * @param peerId
-	 *            An optional peerId byte array.
-	 * @param ip
-	 *            The peer's IP address.
-	 * @param port
-	 *            The peer's port.
-	 */
-	private void processAnnouncedPeer(SharingPeer peer) {
-		synchronized (peer) {
-			// Attempt to connect to the peer if and only if:
-			// - We're not already connected to it;
-			// - We're not a seeder (we leave the responsibility
-			// of connecting to peers that need to download
-			// something), or we are a seeder but we're still
-			// willing to initiate some outbound connections.
-			if (!peer.isBound()
-					&& (!this.isSeed() || this.connected.size() < Client.VOLUNTARY_OUTBOUND_CONNECTIONS)) {
-				peer.setPeerStatus(PeerStatus.CONNECTED);
-				if (!this.service.connect(peer)) {
-					logger.debug("Failed connect to peer {}.", peer);
-					peer.setPeerStatus(PeerStatus.CONNECTION_FAILED);
-				}
-				peer.setLastPeerActivityTime();
-				sharedPeersManager.updatePeer(peer);
-			}
-		}
-	}
-	
-	public class CallablePeerAnnounce implements Runnable {
-
-		private final SharingPeer peer;
-
-		public CallablePeerAnnounce(SharingPeer peer) {
-			this.peer = peer;
-		}
-
-		@Override
-		public void run() {
-			try {
-				processAnnouncedPeer(peer);
-			} catch (Exception e) {
-				logger.error("{}", e.getMessage(), e);
-			}
-		}
-	}
-	
-	static class ResolveClientThreadFactory implements ThreadFactory {
-		private static int id = 1;
-
-		@Override
-		public Thread newThread(Runnable r) {
-			Thread thread = new Thread(r);
-			thread.setDaemon(true);
-			thread.setName("bt-new-client-" + Integer.toString(id));
-			id++;
-			return thread;
-		}
-	}
-
-	@Override
-	public void handleNewPeerConnection(Socket s, byte[] peerId) {
-		SharingPeer peer = sharedPeersManager.getOrCreatePeer(peerId, s
-				.getInetAddress().getHostAddress(), s.getPort());
-
-		try {
-			synchronized (peer) {
-				peer.register(this);
-				peer.bind(s);
-			}
-
-			this.connected.put(peer.getHexPeerId(), peer);
-			peer.register(this.torrent);
-			logger.debug("New peer connection with {} [{}/{}].",
-					new Object[] { peer, this.connected.size(),
-							sharedPeersManager.peersCount() });
-		} catch (SocketException se) {
-			this.connected.remove(peer.getHexPeerId());
-			logger.warn(
-					"Could not handle new peer connection " + "with {}: {}",
-					peer, se.getMessage());
-		}
-	}
+	};
 }

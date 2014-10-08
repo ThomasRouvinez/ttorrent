@@ -16,9 +16,9 @@
 package com.turn.ttorrent.client.peer;
 
 import com.turn.ttorrent.client.Piece;
-import com.turn.ttorrent.common.Peer;
 
 import java.io.IOException;
+
 import java.util.BitSet;
 import java.util.EventListener;
 
@@ -134,11 +134,4 @@ public interface PeerActivityListener extends EventListener {
 	 * @param ioe The IOException object, for reporting.
 	 */
 	public void handleIOException(SharingPeer peer, IOException ioe);
-
-	/**
-	 * Announces new DHT peer.
-	 * 
-	 * @param peer
-	 */
-	public void handleNewDHTPeer(Peer peer);
 }

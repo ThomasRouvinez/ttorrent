@@ -109,12 +109,10 @@ public class ClientMain {
 	/**
 	 * Main client entry point for stand-alone operation.
 	 */
-	
 	public static void main(String[] args) {
 		BasicConfigurator.configure(new ConsoleAppender(
 			new PatternLayout("%d [%-25t] %-5p: %m%n")));
 
-		Client c;
 		CmdLineParser parser = new CmdLineParser();
 		CmdLineParser.Option help = parser.addBooleanOption('h', "help");
 		CmdLineParser.Option output = parser.addStringOption('o', "output");
@@ -152,7 +150,7 @@ public class ClientMain {
 		}
 
 		try {
-			c = new Client(
+			Client c = new Client(
 				getIPv4Address(ifaceValue),
 				SharedTorrent.fromFile(
 					new File(otherArgs[0]),

@@ -19,8 +19,6 @@ import com.turn.ttorrent.common.Torrent;
 import com.turn.ttorrent.client.peer.SharingPeer;
 
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
@@ -342,73 +340,13 @@ public class ConnectionHandler implements Runnable {
 	 *
 	 * @param peer The peer to connect to.
 	 */
-	public boolean connect(SharingPeer peer) {
+	public void connect(SharingPeer peer) {
 		if (!this.isAlive()) {
 			throw new IllegalStateException(
 				"Connection handler is not accepting new peers at this time!");
 		}
 
 		this.executor.submit(new ConnectorTask(this, peer));
-		
-		Socket socket = new Socket();
-		InetSocketAddress address = new InetSocketAddress(peer.getIp(),
-				peer.getPort());
-
-		logger.debug("Connecting to {}...", peer);
-		try {
-			socket.connect(address, 30 * 1000);
-		} catch (IOException ioe) {
-			// Could not connect to peer, abort
-			logger.warn("Could not connect to {}: {}", peer, ioe.getMessage());
-			return false;
-		}
-
-		try {
-			this.sendHandshake(socket);
-			Handshake hs = this.validateHandshake(socket,
-					(peer.hasPeerId() ? peer.getPeerId().array() : null));
-			peer.setReservedBytes(hs.getReserved());
-			this.fireNewPeerConnection(socket, hs.getPeerId());
-			return true;
-		} catch (ParseException pe) {
-			logger.debug("Invalid handshake from {}: {}",
-					this.socketRepr(socket), pe.getMessage());
-			try {
-				socket.close();
-			} catch (IOException e) {
-			}
-		} catch (IOException ioe) {
-			logger.debug("An error occured while reading an incoming "
-					+ "handshake: {}", ioe.getMessage());
-			try {
-				if (!socket.isClosed()) {
-					socket.close();
-				}
-			} catch (IOException e) {
-				// Ignore
-			}
-		}
-
-		return false;
-	}
-	
-	private void sendHandshake(Socket socket) throws IOException {
-		OutputStream os = socket.getOutputStream();
-		os.write(Handshake.craft(this.torrent.getInfoHash(),
-				this.id.getBytes(Torrent.BYTE_ENCODING)).getBytes());
-	}
-	
-	/**
-	 * Return a human-readable representation of a connected socket.
-	 * 
-	 * This returns a <em>host:port</em> string representing the given socket.
-	 * 
-	 * @param s
-	 *            The socket to represent.
-	 */
-	private String socketRepr(Socket s) {
-		return new StringBuilder(s.getInetAddress().getHostName()).append(":")
-				.append(s.getPort()).toString();
 	}
 
 	/**
@@ -479,63 +417,6 @@ public class ConnectionHandler implements Runnable {
 				this.torrent.getInfoHash(),
 				this.id.getBytes(Torrent.BYTE_ENCODING)).getData());
 	}
-	
-	/**
-	 * Trigger the new peer connection event on all registered listeners.
-	 * 
-	 * @param socket
-	 *            The socket to the newly connected peer.
-	 * @param peerId
-	 *            The peer ID of the connected peer.
-	 */
-	private void fireNewPeerConnection(Socket socket, byte[] peerId) {
-		for (IncomingConnectionListener listener : this.listeners) {
-			listener.handleNewPeerConnection(socket, peerId);
-		}
-	}
-	
-	/**
-	 * Validate an expected handshake on a connection.
-	 * 
-	 * Reads an expected handshake message from the given connected socket,
-	 * parses it and validates that the torrent hash_info corresponds to the
-	 * torrent we're sharing, and that the peerId matches the peer ID we expect
-	 * to see coming from the remote peer.
-	 * 
-	 * @param socket
-	 *            The connected socket to the remote peer.
-	 * @param peerId
-	 *            The peer ID we expect in the handshake. If <em>null</em>, any
-	 *            peer ID is accepted (this is the case for incoming
-	 *            connections).
-	 * @return The validated handshake message object.
-	 */
-	private Handshake validateHandshake(Socket socket, byte[] peerId)
-			throws IOException, ParseException {
-		InputStream is = socket.getInputStream();
-
-		// Read the handshake from the wire
-		int pstrlen = is.read();
-		byte[] data = new byte[Handshake.BASE_HANDSHAKE_LENGTH + pstrlen];
-		data[0] = (byte) pstrlen;
-		is.read(data, 1, data.length - 1);
-
-		// Parse and check the handshake
-		Handshake hs = Handshake.parse(ByteBuffer.wrap(data));
-		if (!Arrays.equals(hs.getInfoHash(), this.torrent.getInfoHash())) {
-			throw new ParseException("Handshake for unknown torrent", pstrlen + 9);
-		}
-
-		if (peerId != null && !Arrays.equals(hs.getPeerId(), peerId)) {
-			throw new ParseException("Announced peer ID "
-					+ Torrent.byteArrayToHexString(hs.getPeerId())
-					+ " did not match expected peer ID "
-					+ Torrent.byteArrayToHexString(peerId) + ".", pstrlen + 29);
-		}
-
-		return hs;
-	}
-
 
 	/**
 	 * Trigger the new peer connection event on all registered listeners.

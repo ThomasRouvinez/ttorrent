@@ -1,11 +1,15 @@
 package com.turn.ttorrent.client;
 
 import java.io.File;
+import java.time.Period;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Timer;
+import java.util.TimerTask;
 
 import javax.script.Invocable;
 import javax.script.ScriptEngine;
+import javax.script.ScriptException;
 
 import jdk.nashorn.api.scripting.NashornScriptEngineFactory;
 
@@ -25,10 +29,9 @@ public class DHTManager implements Runnable{
 	private Thread announceThread;
 	private boolean stop;
 	private float timer;
-	private AnnounceDeamon announceService;
-	private static boolean needAnnounce = false;
+	private static boolean periodStarted = false;
 
-	private ScriptEngine se;
+	private static ScriptEngine se;
 	final String[] options = new String[] {
 			"-scripting", // shebangs in modules
 			"--const-as-var" // until const is fully
@@ -36,13 +39,13 @@ public class DHTManager implements Runnable{
 
 	private static Client client;
 	private ConnectionHandler service;
-	private Server server;
+	private static Server server;
 	private static List<Peer> peers;
 
 	private static String infohash;
 
-	private Invocable dhtScript;
-	private String dhtLibraryPath = "DHT.js";
+	private static Invocable dhtScript;
+	private static String dhtLibraryPath = "DHT.js";
 
 	private static final NashornScriptEngineFactory ENGINE_FACTORY = new NashornScriptEngineFactory();
 
@@ -50,11 +53,14 @@ public class DHTManager implements Runnable{
 	// Constructors.
 	// ------------------------------------------------------------------------------------
 
+	/**
+	 * Constructor for DHT Manager
+	 * @param client Bittorrent client.
+	 */
 	public DHTManager(Client client){
 		this.client = client;
 		infohash = client.getTorrent().getHexInfoHash();
 		peers = new ArrayList<Peer>();
-		announceService = new AnnounceDeamon(this);
 		stop = true;
 		timer = 0f;
 
@@ -69,6 +75,9 @@ public class DHTManager implements Runnable{
 	// NasHorn initialization.
 	// ----------------------------------------------------------------
 
+	/**
+	 * Method to initialize all requirements for Nashorn.
+	 */
 	private void initializeNashHorn(){
 
 		try {
@@ -78,8 +87,6 @@ public class DHTManager implements Runnable{
 		}
 
 		Loader loader = new Loader.Core();
-
-		dhtScript = (Invocable) se;
 
 		try {
 			server = new Server(se, loader, new Logging(false), System.getProperty("user.dir"), se.getContext(), 0, ThreadPool.newInstance(), null, null, true);
@@ -92,15 +99,41 @@ public class DHTManager implements Runnable{
 	// Lookup start and callback.
 	// ----------------------------------------------------------------
 
+	/**
+	 * Getter for the Info Hash of the torrent.
+	 * @return This torrent Info Hash.
+	 */
 	public static String getHash(){
 		System.out.println("\nINFO HASH REQUESTED FROM TORRENT");
 		return infohash;
 	}
-	
-	public static boolean announceCheck(){
-		return needAnnounce;
+
+	/**
+	 * Starts a periodic task for announce renewal.
+	 */
+	public static void startAnnounceTimer(){
+		if(periodStarted == false){
+			// Start the timer for the announce.
+			Timer announceCheckerTimer = new Timer(true);
+			announceCheckerTimer.scheduleAtFixedRate(
+					new TimerTask() {
+						public void run() { 
+							System.out.println("ATTEMPT TO RENEW ANNOUNCE...");
+							
+							// Renew the announce here !
+							
+							
+						}
+					}, 0, 300 * 1000);	// Every 5 minutes.
+			
+			periodStarted = true;
+		}
 	}
 
+	/**
+	 * Receive the DHT Peers data and add them to the Peer list.
+	 * @param result Result of the DHT lookup in Javascript (peer address).
+	 */
 	public static void lookupCallback(Object result){
 		// Process the new peer.
 		String[] splitArray = new String[2];
@@ -115,7 +148,7 @@ public class DHTManager implements Runnable{
 		if(! peers.contains(newDHTPeer) && peers.size() < 200){
 			peers.add(newDHTPeer);
 		}
-		
+
 		client.handleDiscoveredPeers(peers);
 	}
 
@@ -144,7 +177,6 @@ public class DHTManager implements Runnable{
 		this.stop = true;
 
 		if (this.thread != null && this.thread.isAlive()){
-			announceService.stop();
 			this.thread.interrupt();
 		}
 
@@ -154,27 +186,10 @@ public class DHTManager implements Runnable{
 	@Override
 	public void run() {
 		try {
-			// Start the daemon for periodic announces.
-			announceService.start();
-			
 			// Launch the DHT.
 			server.run(dhtLibraryPath);
-			
 		} catch (Throwable e1) {
 			e1.printStackTrace();
 		}
-	}
-	
-	// ----------------------------------------------------------------
-	// Getter - setter.
-	// ----------------------------------------------------------------
-
-	public static boolean getNeedAnnounce() {
-		return needAnnounce;
-	}
-
-	public static void setNeedAnnounce(boolean value) {
-		DHTManager.needAnnounce = value;
-		System.out.println("\nANNOUNCE SET TO: " + DHTManager.needAnnounce  + "\n");
 	}
 }

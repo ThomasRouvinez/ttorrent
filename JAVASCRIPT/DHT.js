@@ -3,6 +3,8 @@ var DHT = require('bittorrent-dht')
 var dht = new DHT()
 var infohashReceived
 var check = false
+var minutes = 1
+var announceInterval = minutes * 60 * 1000
 
 // Load the DHT Manager class for access via JS.
 var DHTClass = Java.type('com.turn.ttorrent.client.DHTManager')
@@ -10,12 +12,6 @@ var DHTClass = Java.type('com.turn.ttorrent.client.DHTManager')
 // Get the infohash from the torrent.
 infohashReceived = DHTClass.getHash()
 console.log('RECEIVED INFOHASH ' + infohashReceived)
-
-// Function to perform an announce from Java.
-var callAnnounce = function() {
-	dht.announce(infohashReceived, 55555, null)
-	console.log('PERFORM ANNOUNCE')
-};
 
 // Start listening.
 dht.listen(20000, function () {
@@ -27,7 +23,12 @@ dht.on('ready', function () {
 	dht.lookup(infohashReceived, function(){
 		// Do the announce right after the lookup
 		dht.announce(infohashReceived, 55555, null)
-		DHTClass.startAnnounceTimer()
+		console.log('FIRST ANNOUNCE PERFORMED')
+		
+		setInterval(function(){
+			dht.announce(infohashReceived, 55555, null)
+			console.log('ANNOUNCE PERFORMED')
+		}, announceInterval)
 	})
 })
 

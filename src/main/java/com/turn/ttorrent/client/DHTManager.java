@@ -29,7 +29,6 @@ public class DHTManager implements Runnable{
 	private Thread announceThread;
 	private boolean stop;
 	private float timer;
-	private static boolean periodStarted = false;
 
 	private static ScriptEngine se;
 	final String[] options = new String[] {
@@ -106,28 +105,6 @@ public class DHTManager implements Runnable{
 	public static String getHash(){
 		System.out.println("\nINFO HASH REQUESTED FROM TORRENT");
 		return infohash;
-	}
-
-	/**
-	 * Starts a periodic task for announce renewal.
-	 */
-	public static void startAnnounceTimer(){
-		if(periodStarted == false){
-			// Start the timer for the announce.
-			Timer announceCheckerTimer = new Timer(true);
-			announceCheckerTimer.scheduleAtFixedRate(
-					new TimerTask() {
-						public void run() { 
-							System.out.println("ATTEMPT TO RENEW ANNOUNCE...");
-							
-							// Renew the announce here !
-							
-							
-						}
-					}, 0, 300 * 1000);	// Every 5 minutes.
-			
-			periodStarted = true;
-		}
 	}
 
 	/**
